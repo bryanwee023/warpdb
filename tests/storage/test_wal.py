@@ -230,7 +230,7 @@ def test_log_delete_creates_pending_record(wal):
     assert len(pending) == 1
     assert isinstance(pending[0], DeleteRecord)
     assert pending[0].lsn == lsn
-    assert pending[0].id == "a"
+    assert pending[0].name == "a"
 
 
 def test_log_commit_clears_pending_delete(wal):
@@ -255,7 +255,7 @@ def test_pending_delete_survives_wal_restart(tmp_path):
     pending = w2.get_pending()
     assert len(pending) == 1
     assert isinstance(pending[0], DeleteRecord)
-    assert pending[0].id == "to-delete"
+    assert pending[0].name == "to-delete"
 
 
 def test_committed_delete_absent_after_restart(tmp_path):

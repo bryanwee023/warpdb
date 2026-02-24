@@ -39,7 +39,7 @@ class UpsertRecord:
 @dataclass
 class DeleteRecord:
     lsn: int
-    id: str
+    name: str
 
 
 @dataclass
@@ -298,4 +298,4 @@ class WAL:
         if len(id_bytes) < id_len:
             return None
 
-        return DeleteRecord(lsn=lsn, id=id_bytes.decode("utf-8"))
+        return DeleteRecord(lsn=lsn, name=id_bytes.decode("utf-8"))

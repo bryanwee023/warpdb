@@ -114,7 +114,7 @@ class WarpDB:
 
                 self._wal.log_commit(record.lsn)
             elif isinstance(record, DeleteRecord):
-                self._metadata_store.delete(record.id)  # idempotent
+                self._metadata_store.delete(record.name)  # idempotent
                 self._wal.log_commit(record.lsn)
             elif isinstance(record, CompactRecord):
                 if os.path.exists(self._compact_tmp_path):
