@@ -2,7 +2,7 @@ import json
 import os
 import struct
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -17,12 +17,10 @@ _HEADER_SIZE = 10
 # Record type bytes
 _TYPE_UPSERT = 0x01
 _TYPE_DELETE = 0x02
-_TYPE_COMMIT = 0x03
-_TYPE_COMPACT = 0x04
+_TYPE_COMPACT = 0x03
 
 # UPSERT layout:  magic(4) type(1) lsn(4) id(4) file_offset(4) vector(dim*4) name_len(4) name(N) meta_len(4) meta(M)
 # DELETE layout:  magic(4) type(1) lsn(4) id_len(4) id(N)
-# COMMIT layout:  magic(4) type(1) lsn(4)
 # COMPACT layout: magic(4) type(1) lsn(4)
 
 
@@ -97,15 +95,6 @@ class WAL:
 
         return lsn
 
-    def log_commit(self, lsn: int) -> None:
-        """Write a COMMIT record and fsync."""
-        record = _MAGIC + struct.pack("<BI", _TYPE_COMMIT, lsn)
-
-        with open(self._path, "ab") as f:
-            f.write(record)
-            f.flush()
-            os.fsync(f.fileno())
-
     def log_compact(self) -> int:
         """Write a COMPACT record and fsync. Returns the LSN."""
         lsn = self._lsn
@@ -137,24 +126,22 @@ class WAL:
         return lsn
 
     def get_pending(self) -> List[UpsertRecord | DeleteRecord | CompactRecord]:
-        """Return the trailing record which has no matching COMMIT (at most one).
+        """Return the last WAL record (at most one) which may need replay.
 
-        Because upsert() holds a lock, only one operation is in flight at a time,
-        so a pending entry is always at the tail of the WAL.
+        Because upsert/delete/compact hold a lock, only one operation is in
+        flight at a time.  If record N+1 exists, record N must have fully
+        completed (the lock prevented N+1 from starting otherwise).  Therefore
+        only the *last* record could be incomplete after a crash.
         """
-        last_record : Optional[UpsertRecord | DeleteRecord | CompactRecord] = None
+        last_record: Optional[UpsertRecord | DeleteRecord | CompactRecord] = None
 
-        for rec_type, _, payload in self._iter_records():
-            if rec_type == _TYPE_COMMIT:
-                last_record = None
-            else:
-                assert payload is not None
-                last_record = payload
+        for _, _, payload in self._iter_records():
+            last_record = payload
 
         return [last_record] if last_record is not None else []
 
     def checkpoint(self) -> None:
-        """Rewrite the file to header-only (call only when all entries are committed)."""
+        """Rewrite the file to header-only, discarding all records."""
         self._write_header()
         self._lsn = 0
 
@@ -218,10 +205,7 @@ class WAL:
                 if magic != _MAGIC:
                     break # corrupt
 
-                if rec_type == _TYPE_COMMIT:
-                    yield _TYPE_COMMIT, lsn, None
-
-                elif rec_type == _TYPE_UPSERT:
+                if rec_type == _TYPE_UPSERT:
                     record = self._read_upsert_payload(f, lsn, self._dim)
                     if record is None:
                         break  # truncated mid-record

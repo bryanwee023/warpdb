@@ -16,7 +16,7 @@ def _vec(val: float) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Basic log_upsert / log_commit behaviour
+# Basic log_upsert behaviour
 # ---------------------------------------------------------------------------
 
 def test_log_upsert_creates_pending_record(wal):
@@ -29,15 +29,6 @@ def test_log_upsert_creates_pending_record(wal):
     assert pending[0].name == "a"
     np.testing.assert_array_equal(pending[0].vector, _vec(1.0))
     assert pending[0].metadata == {"k": "v"}
-
-
-def test_log_commit_clears_pending(wal):
-    lsn = wal.log_upsert(0, 0, _vec(1.0), "a", None)
-    assert len(wal.get_pending()) == 1
-
-    wal.log_commit(lsn)
-    assert wal.get_pending() == []
-
 
 
 def test_no_pending_on_empty_wal(wal):
@@ -61,16 +52,14 @@ def test_metadata_dict_roundtrips(wal):
 # Checkpoint
 # ---------------------------------------------------------------------------
 
-def test_checkpoint_truncates_committed_wal(wal):
-    lsn = wal.log_upsert(0, 0, _vec(1.0), "a", None)
-    wal.log_commit(lsn)
+def test_checkpoint_truncates_wal(wal):
+    wal.log_upsert(0, 0, _vec(1.0), "a", None)
     wal.checkpoint()
     assert wal.get_pending() == []
 
 
 def test_checkpoint_resets_lsn(wal):
-    lsn = wal.log_upsert(0, 0, _vec(1.0), "a", None)
-    wal.log_commit(lsn)
+    wal.log_upsert(0, 0, _vec(1.0), "a", None)
     wal.checkpoint()
     lsn2 = wal.log_upsert(1, 100, _vec(2.0), "b", None)
     assert lsn2 == 0  # numbering restarts after checkpoint
@@ -97,8 +86,7 @@ def test_header_dim_mismatch_raises(tmp_path):
 def test_header_survives_checkpoint(tmp_path):
     path = str(tmp_path / "wal.bin")
     w = WAL(path, DIM)
-    lsn = w.log_upsert(0, 0, _vec(1.0), "a", None)
-    w.log_commit(lsn)
+    w.log_upsert(0, 0, _vec(1.0), "a", None)
     w.checkpoint()
     # Should be readable again with the same dim
     w2 = WAL(path, DIM)
@@ -123,12 +111,12 @@ def test_pending_survives_wal_restart(tmp_path):
     assert pending[0].name == "a"
 
 
-def test_committed_entry_absent_after_restart(tmp_path):
+def test_checkpoint_clears_pending_after_restart(tmp_path):
     path = str(tmp_path / "wal.bin")
 
     w1 = WAL(path, DIM)
-    lsn = w1.log_upsert(0, 0, _vec(1.0), "a", None)
-    w1.log_commit(lsn)
+    w1.log_upsert(0, 0, _vec(1.0), "a", None)
+    w1.checkpoint()
 
     w2 = WAL(path, DIM)
     assert w2.get_pending() == []
@@ -139,7 +127,6 @@ def test_lsn_continues_after_restart(tmp_path):
 
     w1 = WAL(path, DIM)
     lsn0 = w1.log_upsert(0, 0, _vec(1.0), "a", None)
-    w1.log_commit(lsn0)
 
     w2 = WAL(path, DIM)
     lsn1 = w2.log_upsert(1, 100, _vec(2.0), "b", None)
@@ -178,7 +165,6 @@ def test_recovery_crash_after_vector_write(tmp_path):
             vs2.append(record.vector)
         if ms2.get(record.id) is None:
             ms2.insert(record.id, record.file_offset, record.name, record.metadata)
-        wal2.log_commit(record.lsn)
 
     row = ms2.get(0)
     assert row is not None
@@ -211,7 +197,6 @@ def test_recovery_crash_before_vector_write(tmp_path):
             vs2.append(record.vector)
         if ms2.get(record.id) is None:
             ms2.insert(record.id, record.file_offset, record.name, record.metadata)
-        wal2.log_commit(record.lsn)
 
     assert vs2.count() == 1
     np.testing.assert_array_equal(vs2.get(0), vec)
@@ -233,13 +218,6 @@ def test_log_delete_creates_pending_record(wal):
     assert pending[0].name == "a"
 
 
-def test_log_commit_clears_pending_delete(wal):
-    lsn = wal.log_delete("a")
-    assert len(wal.get_pending()) == 1
-    wal.log_commit(lsn)
-    assert wal.get_pending() == []
-
-
 def test_no_pending_on_empty_wal_after_delete_section(wal):
     assert wal.get_pending() == []
 
@@ -256,17 +234,6 @@ def test_pending_delete_survives_wal_restart(tmp_path):
     assert len(pending) == 1
     assert isinstance(pending[0], DeleteRecord)
     assert pending[0].name == "to-delete"
-
-
-def test_committed_delete_absent_after_restart(tmp_path):
-    path = str(tmp_path / "wal.bin")
-
-    w1 = WAL(path, DIM)
-    lsn = w1.log_delete("a")
-    w1.log_commit(lsn)
-
-    w2 = WAL(path, DIM)
-    assert w2.get_pending() == []
 
 
 def test_pending_upsert_is_upsert_record_not_delete_record(wal):

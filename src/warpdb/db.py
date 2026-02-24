@@ -59,15 +59,13 @@ class WarpDB:
             file_offset = self._vector_store.size()
 
             # Log intent before touching any persistent storage
-            lsn = self._wal.log_upsert(id, file_offset, vec, name, metadata)
+            self._wal.log_upsert(id, file_offset, vec, name, metadata)
 
             self._vector_store.append(vec)
             self._index.insert(id, file_offset, vec)
             self._metadata_store.insert(id, file_offset, name, metadata)
 
             self._next_id += 1
-
-            self._wal.log_commit(lsn)
 
     def search(
         self,
@@ -91,10 +89,9 @@ class WarpDB:
             if id is None:
                 raise ValueError(f"Name '{name}' not found")
 
-            lsn = self._wal.log_delete(name)
+            self._wal.log_delete(name)
             self._metadata_store.delete(name)
             self._index.delete(id)
-            self._wal.log_commit(lsn)
 
     def delete_all(self) -> None:
         """Delete all vectors, resetting the database to empty state."""
@@ -110,10 +107,9 @@ class WarpDB:
         with self._lock:
             live_offsets = self._metadata_store.iter_offsets()
 
-            lsn = self._wal.log_compact()
+            self._wal.log_compact()
             updates = self._vector_store.compact(live_offsets)
             self._metadata_store.update_offsets(updates)
-            self._wal.log_commit(lsn)
 
             # Rebuild HNSW with updated offsets
             self._index.compact(updates)
@@ -123,7 +119,7 @@ class WarpDB:
     # ------------------------------------------------------------------
 
     def _recover(self) -> None:
-        """Replay any WAL entries that did not reach COMMIT before a crash."""
+        """Replay the last WAL entry if it may be incomplete after a crash."""
         for record in self._wal.get_pending():
             if isinstance(record, UpsertRecord):
                 if record.file_offset >= self._vector_store.size():
@@ -134,10 +130,9 @@ class WarpDB:
                     self._metadata_store.insert(
                         record.id, record.file_offset, record.name, record.metadata)
 
-                self._wal.log_commit(record.lsn)
             elif isinstance(record, DeleteRecord):
                 self._metadata_store.delete(record.name)  # idempotent
-                self._wal.log_commit(record.lsn)
+
             elif isinstance(record, CompactRecord):
                 if os.path.exists(self._compact_tmp_path):
                     # os.replace never happened — discard temp file
@@ -150,4 +145,3 @@ class WarpDB:
                         for i, old_offset in enumerate(self._metadata_store.iter_offsets())
                     }
                     self._metadata_store.update_offsets(updates)
-                self._wal.log_commit(record.lsn)
