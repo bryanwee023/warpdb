@@ -14,7 +14,7 @@ _db: Optional[WarpDB] = None
 
 def get_db() -> WarpDB:
     global _db
-    dim = 128 # TODO: Configurable dimension
+    dim = 768 # TODO: Configurable dimension
     if _db is None:
         _db = WarpDB(dim)
     return _db

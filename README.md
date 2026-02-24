@@ -40,7 +40,7 @@ poetry install
 poetry run uvicorn warpdb.api.server:app --reload
 ```
 
-The server starts on `http://localhost:8000` with vector dimension fixed at 128.
+The server starts on `http://localhost:8000` with vector dimension fixed at 768.
 
 ## Running tests
 
