@@ -27,6 +27,7 @@ def health() -> Dict[str, Any]:
     return {
         "ok": True,
         "count": db.count(),
+        "live_ratio": db.live_ratio(),
     }
 
 @app.delete("/vectors/{name}")
@@ -53,6 +54,14 @@ def upsert(name: str, req: UpsertRequest) -> Dict[str, Any]:
         "ok": True,
         "count": db.count(),
     }
+
+@app.post("/compact")
+def compact(threshold: float = 0.75) -> Dict[str, Any]:
+    db = get_db()
+    if db.live_ratio() < threshold:
+        db.compact()
+        return {"ok": True, "compacted": True, "live_ratio": db.live_ratio()}
+    return {"ok": True, "compacted": False, "live_ratio": db.live_ratio()}
 
 @app.post("/search")
 def search(req: SearchRequest) -> List[Dict[str, Any]]:

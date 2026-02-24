@@ -37,6 +37,13 @@ class WarpDB:
     def count(self) -> int:
         return self._metadata_store.count()
 
+    def live_ratio(self) -> float:
+        """Return the fraction of on-disk vectors that are live (not deleted)."""
+        total = self._vector_store.count()
+        if total == 0:
+            return 1.0
+        return self._metadata_store.count() / total
+
     def upsert(
         self,
         name: str,

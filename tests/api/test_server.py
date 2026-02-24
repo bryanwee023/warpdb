@@ -29,7 +29,7 @@ def test_health_returns_200(client):
 
 def test_health_body(client):
     res = client.get("/health")
-    assert res.json() == {"ok": True, "count": 0}
+    assert res.json() == {"ok": True, "count": 0, "live_ratio": 1.0}
 
 def test_health_count_reflects_upserts(client):
     random.seed(0)
@@ -148,3 +148,57 @@ def test_search_respects_k(client):
         client.put(f"/vectors/{i}", json={"vector": vec([float(i), 0, 0, 0])})
     res = client.post("/search", json={"vector": vec([0, 0, 0, 0]), "k": 2})
     assert len(res.json()) <= 2
+
+
+# ---------------------------------------------------------------------------
+# POST /compact
+# ---------------------------------------------------------------------------
+
+def test_compact_returns_200(client):
+    res = client.post("/compact")
+    assert res.status_code == 200
+
+def test_compact_skips_when_above_threshold(client):
+    random.seed(0)
+    client.put("/vectors/a", json={"vector": vec([1, 0, 0, 0])})
+    client.put("/vectors/b", json={"vector": vec([0, 1, 0, 0])})
+    res = client.post("/compact")
+    body = res.json()
+    assert body["compacted"] is False
+    assert body["live_ratio"] == 1.0
+
+def test_compact_runs_when_below_threshold(client):
+    random.seed(0)
+    for i in range(4):
+        client.put(f"/vectors/{i}", json={"vector": vec([float(i), 0, 0, 0])})
+    client.delete("/vectors/0")
+    client.delete("/vectors/1")
+    # live_ratio = 2/4 = 0.5, below default threshold of 0.75
+    res = client.post("/compact")
+    body = res.json()
+    assert body["compacted"] is True
+    assert body["live_ratio"] == 1.0
+
+def test_compact_custom_threshold(client):
+    random.seed(0)
+    for i in range(4):
+        client.put(f"/vectors/{i}", json={"vector": vec([float(i), 0, 0, 0])})
+    client.delete("/vectors/0")
+    # live_ratio = 3/4 = 0.75 — not below 0.5 threshold
+    res = client.post("/compact?threshold=0.5")
+    assert res.json()["compacted"] is False
+    # but below 0.8 threshold
+    res = client.post("/compact?threshold=0.8")
+    assert res.json()["compacted"] is True
+
+def test_compact_health_reflects_live_ratio(client):
+    random.seed(0)
+    for i in range(4):
+        client.put(f"/vectors/{i}", json={"vector": vec([float(i), 0, 0, 0])})
+    client.delete("/vectors/0")
+    client.delete("/vectors/1")
+    res = client.get("/health")
+    assert res.json()["live_ratio"] == 0.5
+    client.post("/compact")
+    res = client.get("/health")
+    assert res.json()["live_ratio"] == 1.0
