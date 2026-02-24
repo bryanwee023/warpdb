@@ -9,8 +9,6 @@ from warpdb.storage import MetadataStore, VectorStore
 from warpdb.storage.wal import WAL, CompactRecord, DeleteRecord, UpsertRecord
 from warpdb.index import HNSW
 
-_COMPACT_THRESHOLD = 0.25
-
 class WarpDB:
     def __init__(self, dim: int, data_dir: str = "."):
         dir_path = Path(data_dir)
@@ -89,13 +87,19 @@ class WarpDB:
             self._index.delete(id)
             self._wal.log_commit(lsn)
 
-            if self._should_compact():
-                self._compact()
-
     def compact(self) -> None:
         """Remove dead vectors from disk and update all offsets."""
         with self._lock:
-            self._compact()
+            live_offsets = self._metadata_store.iter_offsets()
+
+            lsn = self._wal.log_compact()
+            updates = self._vector_store.compact(live_offsets)
+            self._metadata_store.update_offsets(updates)
+            self._wal.log_commit(lsn)
+
+            # Rebuild HNSW with updated offsets
+            self._index.compact(updates)
+
     # ------------------------------------------------------------------
     # Private
     # ------------------------------------------------------------------
@@ -129,22 +133,3 @@ class WarpDB:
                     }
                     self._metadata_store.update_offsets(updates)
                 self._wal.log_commit(record.lsn)
-
-    def _should_compact(self) -> bool:
-        total = self._vector_store.count()
-        if total == 0:
-            return False
-        dead = total - self._metadata_store.count()
-        return dead / total > _COMPACT_THRESHOLD
-
-    def _compact(self) -> None:
-        live_offsets = self._metadata_store.iter_offsets()
-
-        lsn = self._wal.log_compact()
-        updates = self._vector_store.compact(live_offsets)
-        self._metadata_store.update_offsets(updates)
-        self._wal.log_commit(lsn)
-
-        # Rebuild HNSW with updated offsets
-        self._index.compact(updates)
-

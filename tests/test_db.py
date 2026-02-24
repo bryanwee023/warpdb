@@ -200,18 +200,19 @@ def test_compact_is_idempotent(db):
     db.compact()  # should not raise
     assert db.count() == 1
 
-def test_auto_compact_triggers_above_threshold(tmp_path):
-    """Insert 4 vectors, delete 2 (50% dead > 25% threshold) — auto-compacts."""
+def test_delete_does_not_auto_compact(tmp_path):
+    """Deletes should not trigger compaction automatically."""
     random.seed(0)
     db = WarpDB(dim=DIM, data_dir=str(tmp_path))
     for i in range(4):
         db.upsert(str(i), [float(i), 0, 0, 0])
     assert db._vector_store.count() == 4
 
-    db.delete("0")  # 25% dead — at threshold, not above
+    db.delete("0")
+    db.delete("1")  # 50% dead — no auto-compact
     assert db._vector_store.count() == 4
 
-    db.delete("1")  # 50% dead — triggers compaction
+    db.compact()  # explicit compact still works
     assert db._vector_store.count() == 2
 
 def test_upsert_after_compact_works(db):
@@ -244,11 +245,12 @@ def test_recovery_crash_before_file_swap(tmp_path):
 
     # Simulate: COMPACT WAL record (no commit) + temp file exists
     from warpdb.storage.wal import WAL
-    wal = WAL(str(tmp_path / "wal.bin"), DIM)
+    data_dir = tmp_path / "data"
+    wal = WAL(str(data_dir / "wal.bin"), DIM)
     wal.log_compact()
 
-    tmp_vec_path = str(tmp_path / "vectors.compact.f32")
-    shutil.copy(str(tmp_path / "vectors.f32"), tmp_vec_path)
+    tmp_vec_path = str(data_dir / "vectors.compact.f32")
+    shutil.copy(str(data_dir / "vectors.f32"), tmp_vec_path)
 
     # Restart — should discard temp file, keep original vector file
     random.seed(0)
@@ -274,7 +276,7 @@ def test_recovery_crash_after_file_swap(tmp_path):
 
     # Write COMPACT WAL record (no commit)
     from warpdb.storage.wal import WAL
-    wal = WAL(str(tmp_path / "wal.bin"), DIM)
+    wal = WAL(str(tmp_path / "data" / "wal.bin"), DIM)
     wal.log_compact()
 
     # Rewrite vector file (os.replace happens inside)

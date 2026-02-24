@@ -176,7 +176,7 @@ class HNSW:
 
     def compact(self, updates: Dict[int, int]) -> None:
         """
-        Apply offset updates and rebuild the graph from live nodes.
+        Apply offset updates and prune edges to deleted nodes.
         updates: {old_offset: new_offset}
         """
         new_offsets = {}
