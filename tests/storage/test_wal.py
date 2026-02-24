@@ -20,18 +20,19 @@ def _vec(val: float) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def test_log_upsert_creates_pending_record(wal):
-    lsn = wal.log_upsert("a", 0, _vec(1.0), {"k": "v"})
+    lsn = wal.log_upsert(0, 100, _vec(1.0), "a", {"k": "v"})
     pending = wal.get_pending()
     assert len(pending) == 1
     assert pending[0].lsn == lsn
-    assert pending[0].id == "a"
-    assert pending[0].vec_id == 0
+    assert pending[0].id == 0
+    assert pending[0].file_offset == 100
+    assert pending[0].name == "a"
     np.testing.assert_array_equal(pending[0].vector, _vec(1.0))
     assert pending[0].metadata == {"k": "v"}
 
 
 def test_log_commit_clears_pending(wal):
-    lsn = wal.log_upsert("a", 0, _vec(1.0), None)
+    lsn = wal.log_upsert(0, 0, _vec(1.0), "a", None)
     assert len(wal.get_pending()) == 1
 
     wal.log_commit(lsn)
@@ -44,14 +45,14 @@ def test_no_pending_on_empty_wal(wal):
 
 
 def test_metadata_none_roundtrips(wal):
-    wal.log_upsert("x", 5, _vec(0.5), None)
+    wal.log_upsert(0, 5, _vec(0.5), "x", None)
     pending = wal.get_pending()
     assert pending[0].metadata is None
 
 
 def test_metadata_dict_roundtrips(wal):
     meta = {"label": "cat", "score": 0.99}
-    wal.log_upsert("y", 7, _vec(0.1), meta)
+    wal.log_upsert(0, 7, _vec(0.1), "y", meta)
     pending = wal.get_pending()
     assert pending[0].metadata == meta
 
@@ -61,17 +62,17 @@ def test_metadata_dict_roundtrips(wal):
 # ---------------------------------------------------------------------------
 
 def test_checkpoint_truncates_committed_wal(wal):
-    lsn = wal.log_upsert("a", 0, _vec(1.0), None)
+    lsn = wal.log_upsert(0, 0, _vec(1.0), "a", None)
     wal.log_commit(lsn)
     wal.checkpoint()
     assert wal.get_pending() == []
 
 
 def test_checkpoint_resets_lsn(wal):
-    lsn = wal.log_upsert("a", 0, _vec(1.0), None)
+    lsn = wal.log_upsert(0, 0, _vec(1.0), "a", None)
     wal.log_commit(lsn)
     wal.checkpoint()
-    lsn2 = wal.log_upsert("b", 1, _vec(2.0), None)
+    lsn2 = wal.log_upsert(1, 100, _vec(2.0), "b", None)
     assert lsn2 == 0  # numbering restarts after checkpoint
 
 
@@ -96,7 +97,7 @@ def test_header_dim_mismatch_raises(tmp_path):
 def test_header_survives_checkpoint(tmp_path):
     path = str(tmp_path / "wal.bin")
     w = WAL(path, DIM)
-    lsn = w.log_upsert("a", 0, _vec(1.0), None)
+    lsn = w.log_upsert(0, 0, _vec(1.0), "a", None)
     w.log_commit(lsn)
     w.checkpoint()
     # Should be readable again with the same dim
@@ -112,20 +113,21 @@ def test_pending_survives_wal_restart(tmp_path):
     path = str(tmp_path / "wal.bin")
 
     w1 = WAL(path, DIM)
-    w1.log_upsert("a", 0, _vec(1.0), None)
+    w1.log_upsert(0, 0, _vec(1.0), "a", None)
     # no commit — simulates crash
 
     w2 = WAL(path, DIM)  # new instance reads same file
     pending = w2.get_pending()
     assert len(pending) == 1
-    assert pending[0].id == "a"
+    assert pending[0].id == 0
+    assert pending[0].name == "a"
 
 
 def test_committed_entry_absent_after_restart(tmp_path):
     path = str(tmp_path / "wal.bin")
 
     w1 = WAL(path, DIM)
-    lsn = w1.log_upsert("a", 0, _vec(1.0), None)
+    lsn = w1.log_upsert(0, 0, _vec(1.0), "a", None)
     w1.log_commit(lsn)
 
     w2 = WAL(path, DIM)
@@ -136,11 +138,11 @@ def test_lsn_continues_after_restart(tmp_path):
     path = str(tmp_path / "wal.bin")
 
     w1 = WAL(path, DIM)
-    lsn0 = w1.log_upsert("a", 0, _vec(1.0), None)
+    lsn0 = w1.log_upsert(0, 0, _vec(1.0), "a", None)
     w1.log_commit(lsn0)
 
     w2 = WAL(path, DIM)
-    lsn1 = w2.log_upsert("b", 1, _vec(2.0), None)
+    lsn1 = w2.log_upsert(1, 100, _vec(2.0), "b", None)
     assert lsn1 > lsn0
 
 
@@ -157,10 +159,10 @@ def test_recovery_crash_after_vector_write(tmp_path):
     wal = WAL(str(tmp_path / "wal.bin"), DIM)
 
     vec = _vec(1.0)
-    vec_id = vs.count()  # == 0
+    file_offset = vs.size()  # == 0
 
     # Log intent
-    wal.log_upsert("crash-victim", vec_id, vec, {"info": "test"})
+    wal.log_upsert(0, file_offset, vec, "crash-victim", {"info": "test"})
 
     # Write vector — then "crash" (no metadata insert, no commit)
     vs.append(vec)
@@ -172,15 +174,15 @@ def test_recovery_crash_after_vector_write(tmp_path):
 
     # Recovery logic (mirrors WarpDB._recover)
     for record in wal2.get_pending():
-        if record.vec_id >= vs2.count():
+        if record.file_offset >= vs2.size():
             vs2.append(record.vector)
-        if ms2.get(record.vec_id) is None:
-            ms2.insert(record.id, record.vec_id, record.metadata)
+        if ms2.get(record.id) is None:
+            ms2.insert(record.id, record.file_offset, record.name, record.metadata)
         wal2.log_commit(record.lsn)
 
     row = ms2.get(0)
     assert row is not None
-    assert row["id"] == "crash-victim"
+    assert row["name"] == "crash-victim"
     assert row["metadata"] == {"info": "test"}
     assert vs2.count() == 1
 
@@ -194,10 +196,10 @@ def test_recovery_crash_before_vector_write(tmp_path):
     wal = WAL(str(tmp_path / "wal.bin"), DIM)
 
     vec = _vec(2.0)
-    vec_id = vs.count()  # == 0
+    file_offset = vs.size()  # == 0
 
     # Log intent — then "crash" immediately (nothing else written)
-    wal.log_upsert("no-vector", vec_id, vec, None)
+    wal.log_upsert(0, file_offset, vec, "no-vector", None)
 
     # --- restart ---
     vs2 = VectorStore(str(tmp_path / "vectors.f32"), DIM)
@@ -205,17 +207,17 @@ def test_recovery_crash_before_vector_write(tmp_path):
     wal2 = WAL(str(tmp_path / "wal.bin"), DIM)
 
     for record in wal2.get_pending():
-        if record.vec_id >= vs2.count():
+        if record.file_offset >= vs2.size():
             vs2.append(record.vector)
-        if ms2.get(record.vec_id) is None:
-            ms2.insert(record.id, record.vec_id, record.metadata)
+        if ms2.get(record.id) is None:
+            ms2.insert(record.id, record.file_offset, record.name, record.metadata)
         wal2.log_commit(record.lsn)
 
     assert vs2.count() == 1
     np.testing.assert_array_equal(vs2.get(0), vec)
     row = ms2.get(0)
     assert row is not None
-    assert row["id"] == "no-vector"
+    assert row["name"] == "no-vector"
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +270,7 @@ def test_committed_delete_absent_after_restart(tmp_path):
 
 
 def test_pending_upsert_is_upsert_record_not_delete_record(wal):
-    wal.log_upsert("a", 0, _vec(1.0), None)
+    wal.log_upsert(0, 0, _vec(1.0), "a", None)
     pending = wal.get_pending()
     assert len(pending) == 1
     assert isinstance(pending[0], UpsertRecord)

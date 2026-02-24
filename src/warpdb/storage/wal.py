@@ -19,7 +19,7 @@ _TYPE_UPSERT = 0x01
 _TYPE_DELETE = 0x02
 _TYPE_COMMIT = 0x03
 
-# UPSERT layout: magic(4) type(1) lsn(4) id_len(4) id(N) vec_id(4) vector(dim*4) meta_len(4) meta(M)
+# UPSERT layout: magic(4) type(1) lsn(4) id(4) file_offset(4) vector(dim*4) name_len(4) name(N) meta_len(4) meta(M)
 # DELETE layout: magic(4) type(1) lsn(4) id_len(4) id(N)
 # COMMIT layout: magic(4) type(1) lsn(4)
 
@@ -27,9 +27,10 @@ _TYPE_COMMIT = 0x03
 @dataclass
 class UpsertRecord:
     lsn: int
-    id: str
-    vec_id: int
+    id: int
+    file_offset: int
     vector: np.ndarray
+    name: str
     metadata: Optional[Dict[str, Any]]
 
 
@@ -57,25 +58,27 @@ class WAL:
 
     def log_upsert(
         self,
-        id: str,
-        vec_id: int,
+        id: int,
+        file_offset: int,
         vector: np.ndarray,
+        name: str,
         metadata: Optional[dict],
     ) -> int:
         """Write an UPSERT record and fsync. Returns the LSN."""
         lsn = self._lsn
         self._lsn += 1
 
-        id_bytes = id.encode("utf-8")
+        name_bytes = name.encode("utf-8")
         meta_bytes = json.dumps(metadata).encode("utf-8") if metadata is not None else b""
         vector_f32 = vector.astype(np.float32)
 
         header = _MAGIC + struct.pack("<BI", _TYPE_UPSERT, lsn)
         body = (
-            struct.pack("<I", len(id_bytes))
-            + id_bytes
-            + struct.pack("<I", vec_id)
+            struct.pack("<I", id)
+            + struct.pack("<I", file_offset)
             + vector_f32.tobytes()
+            + struct.pack("<I", len(name_bytes))
+            + name_bytes
             + struct.pack("<I", len(meta_bytes))
             + meta_bytes
         )
@@ -215,29 +218,35 @@ class WAL:
     @staticmethod
     def _read_upsert_payload(f, lsn: int, dim: int) -> Optional[UpsertRecord]:
         """Read the variable-length body of an UPSERT record from file f."""
-        # id_len (4 bytes)
+        # id (4 bytes)
         raw = f.read(4)
         if len(raw) < 4:
             return None
-        (id_len,) = struct.unpack("<I", raw)
+        (id_,) = struct.unpack("<I", raw)
 
-        # id
-        id_bytes = f.read(id_len)
-        if len(id_bytes) < id_len:
-            return None
-        id_ = id_bytes.decode("utf-8")
-
-        # vec_id (4 bytes) — dim comes from the file header, not per-record
+        # file_offset (4 bytes)
         raw = f.read(4)
         if len(raw) < 4:
             return None
-        (vec_id,) = struct.unpack("<I", raw)
+        (file_offset,) = struct.unpack("<I", raw)
 
         # vector
         vec_bytes = f.read(dim * 4)
         if len(vec_bytes) < dim * 4:
             return None
         vector = np.frombuffer(vec_bytes, dtype=np.float32).copy()
+
+        # name_len (4)
+        raw = f.read(4)
+        if len(raw) < 4:
+            return None
+        (name_len,) = struct.unpack("<I", raw)
+
+        # name
+        name_bytes = f.read(name_len)
+        if len(name_bytes) < name_len:
+            return None
+        name = name_bytes.decode("utf-8")
 
         # meta_len (4)
         raw = f.read(4)
@@ -251,7 +260,7 @@ class WAL:
             return None
         metadata = json.loads(meta_bytes.decode("utf-8")) if meta_len > 0 else None
 
-        return UpsertRecord(lsn=lsn, id=id_, vec_id=vec_id, vector=vector, metadata=metadata)
+        return UpsertRecord(lsn=lsn, id=id_, file_offset=file_offset, vector=vector, name=name, metadata=metadata)
 
     @staticmethod
     def _read_delete_payload(f, lsn: int) -> Optional[DeleteRecord]:

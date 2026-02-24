@@ -20,38 +20,41 @@ class WarpDB:
         # Replay any writes that didn't complete before the last crash
         self._recover()
 
-        # Rebuild the in-memory HNSW graph from the (now-consistent) vector store,
-        # skipping soft-deleted entries. TODO: revisit after compaction is implemented.
-        for vec_id in range(self._vector_store.count()):
-            if self._metadata_store.get(vec_id) is not None:
-                vec = self._vector_store.get(vec_id)
-                self._index._insert(vec_id, vec)
+        self._next_id = self._metadata_store.get_max_id() + 1
+
+        # Rebuild the in-memory HNSW graph from the (now-consistent) metadata store.
+        for id, file_offset in self._metadata_store.iter_offsets():
+            vec = self._vector_store.get(file_offset)
+            self._index.insert(id, file_offset, vec)
 
         # All pending WAL entries are resolved; compact the log
         self._wal.checkpoint()
 
     def count(self) -> int:
-        return self._metadata_store.count_active()
+        return self._metadata_store.count()
 
     def upsert(
         self,
-        id: str,
+        name: str,
         vector: List[float],
         metadata: Optional[dict] = None,
     ):
         with self._lock:
-            if self._metadata_store.exists(id):
-                raise ValueError(f"ID '{id}' already exists")
+            if self._metadata_store.exists(name):
+                raise ValueError(f"Name '{name}' already exists")
 
             vec = np.array(vector, dtype=np.float32)
-            vec_id = self._vector_store.count()  # safe prediction under the lock
+            id = self._next_id
+            file_offset = self._vector_store.size()
 
             # Log intent before touching any persistent storage
-            lsn = self._wal.log_upsert(id, vec_id, vec, metadata)
+            lsn = self._wal.log_upsert(id, file_offset, vec, name, metadata)
 
-            vec_id = self._vector_store.append(vec)
-            self._index._insert(vec_id, vec)
-            self._metadata_store.insert(id, vec_id, metadata)
+            self._vector_store.append(vec)
+            self._index.insert(id, file_offset, vec)
+            self._metadata_store.insert(id, file_offset, name, metadata)
+
+            self._next_id += 1
 
             self._wal.log_commit(lsn)
 
@@ -68,7 +71,7 @@ class WarpDB:
             for dist, vec_id in candidates:
                 metadata = self._metadata_store.get(vec_id)
                 if metadata:
-                    results.append((dist, metadata["id"]))
+                    results.append((dist, metadata["name"]))
             return results
 
     def delete(self, id: str) -> None:
@@ -88,12 +91,13 @@ class WarpDB:
         """Replay any WAL entries that did not reach COMMIT before a crash."""
         for record in self._wal.get_pending():
             if isinstance(record, UpsertRecord):
-                if record.vec_id >= self._vector_store.count():
+                if record.file_offset >= self._vector_store.size():
                     # Vector was never written — append it now
                     self._vector_store.append(record.vector)
 
-                if self._metadata_store.get(record.vec_id) is None:
-                    self._metadata_store.insert(record.id, record.vec_id, record.metadata)
+                if self._metadata_store.get(record.id) is None:
+                    self._metadata_store.insert(
+                        record.id, record.file_offset, record.name, record.metadata)
 
                 self._wal.log_commit(record.lsn)
             elif isinstance(record, DeleteRecord):

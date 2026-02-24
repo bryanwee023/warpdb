@@ -21,8 +21,8 @@ class HNSW:
         self._ef_search = ef_search
         self._mL = 1.0 / math.log(M) # level generation normalization factor
 
-        # Layered adjacency list: _graph[layer][node_id] = {neighbor_ids}
-        self._vector_store = vector_store
+        self._vector_store = vector_store # _graph[layer][node_id] = {neighbor_ids}
+        self._offsets: Dict[int, int] = {}  # node_id -> file_offset
         self._graph: Dict[int, Dict[int, Set[int]]] = {}
         self._entry_point: Optional[int] = None
         self._max_layer: int = -1
@@ -55,7 +55,8 @@ class HNSW:
         found: List[Tuple[float, int]] = [] # max-heap: (-dist, node_id)
 
         for eid in entry_points:
-            dist = self._dist(query, self._vector_store.get(eid)) # TODO: Use VectorStore
+            offset = self._offsets[eid]
+            dist = self._dist(query, self._vector_store.get(offset))
             heapq.heappush(candidates, (dist, eid))
             heapq.heappush(found, (-dist, eid))
 
@@ -71,7 +72,8 @@ class HNSW:
                     continue
 
                 visited.add(nid)
-                dist_n = self._dist(query, self._vector_store.get(nid)) # TODO: Use VectorStore
+                offset = self._offsets[nid]
+                dist_n = self._dist(query, self._vector_store.get(offset))
                 dist_f = -found[0][0]
 
                 if dist_n < dist_f or len(found) < ef:
@@ -92,19 +94,11 @@ class HNSW:
         """
         return [nid for _, nid in sorted(candidates)[:M]]
 
-    def add(self, vector: np.ndarray) -> int:
-        """
-        Insert a vector into the index. Returns its integer id.
-        """
-        node_id = self._vector_store.append(vector)
-        self._insert(node_id, vector)
-        return node_id
-
-    def _insert(self, node_id: int, vector: np.ndarray) -> None:
+    def insert(self, node_id: int, file_offset: int, vector: np.ndarray) -> None:
         """
         Add a node that is already in the vector store to the graph.
-        Called by add() and also directly during index rebuild on startup.
         """
+        self._offsets[node_id] = file_offset
         level = self._random_level()
 
         for layer_id in range(level + 1):
@@ -134,9 +128,10 @@ class HNSW:
 
                 # Prune nid's connections if over limit
                 if len(self._graph[layer_id][nid]) > M_max:
-                    n_vec = self._vector_store.get(nid)
+                    n_offset = self._offsets[nid]
+                    n_vec = self._vector_store.get(n_offset)
                     n_candidates = [
-                        (self._dist(n_vec, self._vector_store.get(x)), x)
+                        (self._dist(n_vec, self._vector_store.get(self._offsets[x])), x)
                         for x in self._graph[layer_id][nid]
                     ]
                     self._graph[layer_id][nid] = set(self._select_neighbors(n_candidates, M_max))

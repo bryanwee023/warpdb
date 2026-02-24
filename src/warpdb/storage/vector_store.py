@@ -22,41 +22,50 @@ class VectorStore:
     def count(self) -> int:
         return self._count
 
+    def size(self) -> int:
+        """Return the size of the vector store in bytes."""
+        return self._count * self._dim * 4
+
+    def next_offset(self) -> int:
+        """Return the byte offset where the next append will write."""
+        return self._count * self._dim * 4
+
     def _get_mmap(self) -> np.memmap:
         if self._mmap is None:
             self._mmap = np.memmap(self._path, dtype=np.float32, mode="r", shape=(self._count, self._dim))
         return self._mmap
 
-    def append(self, vectors: np.ndarray) -> int:
-        """
-        vectors: shape (N, dim), dtype float32
-        Appends to the flat binary .f32 file.
-        """
-        if vectors.ndim != 1:
+    def append(self, vector: np.ndarray) -> int:
+        """Append a single vector and return its byte offset in the file."""
+        if vector.ndim != 1:
             raise ValueError("Input vectors must be a 1D array.")
 
-        dim = vectors.shape[0]
+        dim = vector.shape[0]
 
         if dim != self._dim:
             raise ValueError(f"Expected vectors with dimension {self._dim}, got {dim}.")
-        
-        if vectors.dtype != np.float32:
-            vectors = vectors.astype(np.float32)
+
+        if vector.dtype != np.float32:
+            vector = vector.astype(np.float32)
+
+        offset = self._count * self._dim * 4
 
         with open(self._path, "ab") as f:
-            vectors.tofile(f)
+            vector.tofile(f)
 
         self._count += 1
         self._mmap = None  # invalidate cached mmap
 
-        return self._count - 1
+        return offset
 
-    def get(self, id: int) -> np.ndarray:
-        """
-        Retrieves a single vector by its index.
-        """
-        if id < 0 or id >= self._count:
-            raise IndexError("Index out of range.")
+    def get(self, offset: int) -> np.ndarray:
+        """Retrieve a single vector by its byte offset in the file."""
+        bytes_per_vec = self._dim * 4
+        if offset % bytes_per_vec != 0:
+            raise ValueError(f"Offset {offset} is not aligned to vector size ({bytes_per_vec} bytes).")
+        index = offset // bytes_per_vec
+        if index < 0 or index >= self._count:
+            raise IndexError("Offset out of range.")
 
-        return self._get_mmap()[id]
+        return self._get_mmap()[index]
 

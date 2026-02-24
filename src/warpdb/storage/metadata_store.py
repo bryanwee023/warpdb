@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, Optional, Tuple
 import sqlite3
 
 class MetadataStore:
@@ -9,59 +9,74 @@ class MetadataStore:
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS metadata (
-                vec_id   INTEGER PRIMARY KEY,
-                id       TEXT NOT NULL UNIQUE,
-                metadata TEXT
+                id             INTEGER PRIMARY KEY,
+                file_offset    INTEGER NOT NULL,
+                name           TEXT NOT NULL UNIQUE,
+                metadata       TEXT
             )
             """
         )
         self._conn.commit()
 
-    def insert(self, id: str, vec_id: int, metadata: Optional[dict] = None):
+    def get_max_id(self) -> int:
+        cursor = self._conn.cursor()
+        cursor.execute("SELECT MAX(id) FROM metadata")
+        row = cursor.fetchone()
+        return row[0] if row and row[0] is not None else 0
+
+    def insert(self, id: int, file_offset: int, name: str, metadata: Optional[dict] = None):
         cursor = self._conn.cursor()
         cursor.execute(
             """
-            INSERT INTO metadata (id, vec_id, metadata)
-            VALUES (?, ?, ?)
+            INSERT INTO metadata (id, file_offset, name, metadata)
+            VALUES (?, ?, ?, ?)
             """,
-            (id, vec_id, json.dumps(metadata) if metadata else None),
+            (id, file_offset, name, json.dumps(metadata) if metadata else None),
         )
         self._conn.commit()
 
-    def exists(self, id: str) -> bool:
+    def exists(self, name: str) -> bool:
         cursor = self._conn.cursor()
-        cursor.execute("SELECT 1 FROM metadata WHERE id = ?", (id,))
+        cursor.execute("SELECT 1 FROM metadata WHERE name = ?", (name,))
         return cursor.fetchone() is not None
 
-    def get(self, vec_id: int) -> Optional[Dict[str, Any]]:
+    def get(self, id: int) -> Optional[Dict[str, Any]]:
         cursor = self._conn.cursor()
         cursor.execute(
             """
-            SELECT id, metadata
+            SELECT file_offset, name, metadata
             FROM metadata
-            WHERE vec_id = ?
+            WHERE id = ?
             """,
-            (vec_id,),
+            (id,),
         )
         row = cursor.fetchone()
         if row is None:
             return None
-        id, metadata_json = row
+        file_offset, name, metadata_json = row
         metadata = json.loads(metadata_json) if metadata_json else None
         return {
             "id": id,
-            "vec_id": vec_id,
+            "file_offset": file_offset,
+            "name": name,
             "metadata": metadata,
         }
 
-    def delete(self, id: str) -> None:
+    def delete(self, name: str) -> None:
         self._conn.execute(
-            "DELETE FROM metadata WHERE id = ?",
-            (id,),
+            "DELETE FROM metadata WHERE name = ?",
+            (name,),
         )
         self._conn.commit()
 
-    def count_active(self) -> int:
+    def iter_offsets(self) -> Iterator[Tuple[int, int]]:
+        """Yield (id, file_offset) pairs ordered by id."""
+        cursor = self._conn.cursor()
+        cursor.execute("SELECT id, file_offset FROM metadata ORDER BY id")
+        for row in cursor:
+            yield row[0], row[1]
+
+    def count(self) -> int:
         cursor = self._conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM metadata")
         return cursor.fetchone()[0]
