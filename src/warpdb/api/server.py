@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from warpdb.api.models import UpsertRequest
+from warpdb.api.models import SearchRequest, UpsertRequest
 from warpdb.db import WarpDB
 
 # ---------- App + DB lifecycle ----------
@@ -53,3 +53,9 @@ def upsert(id: str, req: UpsertRequest) -> Dict[str, Any]:
         "ok": True,
         "count": db.count(),
     }
+
+@app.post("/search")
+def search(req: SearchRequest) -> List[Dict[str, Any]]:
+    db = get_db()
+    results = db.search(req.vector, req.k)
+    return [{"distance": dist, "name": name} for dist, name in results]

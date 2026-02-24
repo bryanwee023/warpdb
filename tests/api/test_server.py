@@ -111,3 +111,40 @@ def test_delete_decrements_health_count(client):
 def test_delete_nonexistent_returns_404(client):
     res = client.delete("/vectors/ghost")
     assert res.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /search
+# ---------------------------------------------------------------------------
+
+def test_search_returns_200(client):
+    res = client.post("/search", json={"vector": vec([1, 0, 0, 0])})
+    assert res.status_code == 200
+
+def test_search_empty_db_returns_empty(client):
+    res = client.post("/search", json={"vector": vec([1, 0, 0, 0])})
+    assert res.json() == []
+
+def test_search_returns_nearest(client):
+    random.seed(42)
+    client.put("/vectors/a", json={"vector": vec([1, 0, 0, 0])})
+    client.put("/vectors/b", json={"vector": vec([0, 1, 0, 0])})
+    res = client.post("/search", json={"vector": vec([1, 0, 0, 0]), "k": 1})
+    results = res.json()
+    assert len(results) == 1
+    assert results[0]["name"] == "a"
+
+def test_search_result_has_distance_and_name(client):
+    random.seed(0)
+    client.put("/vectors/a", json={"vector": vec([1, 0, 0, 0])})
+    res = client.post("/search", json={"vector": vec([1, 0, 0, 0]), "k": 1})
+    result = res.json()[0]
+    assert "distance" in result
+    assert "name" in result
+
+def test_search_respects_k(client):
+    random.seed(0)
+    for i in range(5):
+        client.put(f"/vectors/{i}", json={"vector": vec([float(i), 0, 0, 0])})
+    res = client.post("/search", json={"vector": vec([0, 0, 0, 0]), "k": 2})
+    assert len(res.json()) <= 2
