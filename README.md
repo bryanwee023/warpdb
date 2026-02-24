@@ -47,3 +47,23 @@ The server starts on `http://localhost:8000` with vector dimension fixed at 768.
 ```bash
 poetry run pytest
 ```
+
+## Benchmarking
+
+With the server running, execute the benchmark suite in a separate terminal:
+
+```bash
+python benchmarks/bench.py
+```
+
+This runs four workloads against the server:
+
+| Workload | What it measures |
+|---|---|
+| Upsert throughput | Vectors/sec at varying concurrency levels |
+| Search latency | p50/p95/p99 latency and queries/sec |
+| Recall@10 | HNSW approximation accuracy vs brute-force |
+| Compaction | Time to reclaim dead vectors from disk |
+| Mixed 80/20 | Read/write contention over a timed window |
+
+Run `python benchmarks/bench.py --help` for all options.
