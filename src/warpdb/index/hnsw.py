@@ -174,6 +174,13 @@ class HNSW:
                 self._entry_point = None
                 self._max_layer = -1
 
+    def clear(self) -> None:
+        """Remove all nodes from the graph."""
+        self._offsets.clear()
+        self._graph.clear()
+        self._entry_point = None
+        self._max_layer = -1
+
     def compact(self, updates: Dict[int, int]) -> None:
         """
         Apply offset updates and prune edges to deleted nodes.

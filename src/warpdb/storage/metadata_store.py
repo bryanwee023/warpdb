@@ -75,6 +75,10 @@ class MetadataStore:
         )
         self._conn.commit()
 
+    def delete_all(self) -> None:
+        self._conn.execute("DELETE FROM metadata")
+        self._conn.commit()
+
     def iter_offsets(self) -> Iterator[int]:
         """Yield file_offset values ordered by file_offset."""
         cursor = self._conn.cursor()

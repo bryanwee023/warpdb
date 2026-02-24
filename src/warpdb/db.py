@@ -96,6 +96,15 @@ class WarpDB:
             self._index.delete(id)
             self._wal.log_commit(lsn)
 
+    def delete_all(self) -> None:
+        """Delete all vectors, resetting the database to empty state."""
+        with self._lock:
+            self._wal.checkpoint()
+            self._metadata_store.delete_all()
+            self._index.clear()
+            self._vector_store.truncate()
+            self._next_id = 1
+
     def compact(self) -> None:
         """Remove dead vectors from disk and update all offsets."""
         with self._lock:

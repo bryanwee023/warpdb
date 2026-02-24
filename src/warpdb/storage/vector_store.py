@@ -71,6 +71,14 @@ class VectorStore:
 
         return self._get_mmap()[index]
 
+    def truncate(self) -> None:
+        """Remove all vectors from the store file."""
+        with open(self._path, "wb") as f:
+            f.flush()
+            os.fsync(f.fileno())
+        self._count = 0
+        self._mmap = None
+
     def compact(self, live_offsets: Iterator[int]) -> Dict[int, int]:
         """Rewrite file with only the vectors at the given offsets.
 

@@ -30,6 +30,12 @@ def health() -> Dict[str, Any]:
         "live_ratio": db.live_ratio(),
     }
 
+@app.delete("/vectors")
+def delete_all_vectors() -> Dict[str, Any]:
+    db = get_db()
+    db.delete_all()
+    return {"ok": True}
+
 @app.delete("/vectors/{name}")
 def delete_vector(name: str) -> Dict[str, Any]:
     db = get_db()
