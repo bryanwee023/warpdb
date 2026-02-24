@@ -198,3 +198,61 @@ class TestSearch:
         _add(store, index, 0, v)
         results = index.search(v, k=1)
         assert results[0][0] == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# compact
+# ---------------------------------------------------------------------------
+
+class TestCompact:
+    def test_compact_removes_deleted_nodes_from_graph(self, store, index):
+        random.seed(0)
+        for i in range(5):
+            v = np.zeros(DIM, dtype=np.float32)
+            v[i % DIM] = float(i + 1)
+            _add(store, index, i, v)
+
+        index.delete(2)
+        # Node 2 is still in the graph before compact
+        assert any(2 in layer for layer in index._graph.values())
+
+        # Simulate compaction: offsets unchanged for live nodes
+        updates = {offset: offset for nid, offset in index._offsets.items()}
+        index.compact(updates)
+
+        # Node 2 should be gone from all layers and neighbor sets
+        for layer in index._graph.values():
+            assert 2 not in layer
+            for neighbors in layer.values():
+                assert 2 not in neighbors
+
+    def test_compact_preserves_live_edges(self, store, index):
+        random.seed(0)
+        for i in range(5):
+            v = np.zeros(DIM, dtype=np.float32)
+            v[i % DIM] = float(i + 1)
+            _add(store, index, i, v)
+
+        index.delete(2)
+        updates = {offset: offset for nid, offset in index._offsets.items()}
+        index.compact(updates)
+
+        # All live nodes should still be in layer 0
+        for nid in [0, 1, 3, 4]:
+            assert nid in index._graph[0]
+
+    def test_search_works_after_compact(self, store, index):
+        random.seed(42)
+        for i in range(DIM):
+            v = np.zeros(DIM, dtype=np.float32)
+            v[i] = 100.0
+            _add(store, index, i, v)
+
+        index.delete(0)
+        updates = {offset: offset for nid, offset in index._offsets.items()}
+        index.compact(updates)
+
+        query = np.zeros(DIM, dtype=np.float32)
+        query[1] = 100.0
+        results = index.search(query, k=1)
+        assert results[0][1] == 1

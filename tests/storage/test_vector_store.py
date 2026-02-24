@@ -111,3 +111,58 @@ def test_size_equals_next_offset(store):
     assert store.size() == store.next_offset()
     store.append(v)
     assert store.size() == store.next_offset()
+
+
+# ---------------------------------------------------------------------------
+# compact
+# ---------------------------------------------------------------------------
+
+def test_compact_preserves_vector_data(store):
+    v0 = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+    v1 = np.array([5.0, 6.0, 7.0, 8.0], dtype=np.float32)
+    v2 = np.array([9.0, 10.0, 11.0, 12.0], dtype=np.float32)
+    off0 = store.append(v0)
+    store.append(v1)  # will be "deleted"
+    off2 = store.append(v2)
+
+    mapping = store.compact([off0, off2])
+
+    np.testing.assert_array_equal(store.get(mapping[off0]), v0)
+    np.testing.assert_array_equal(store.get(mapping[off2]), v2)
+
+def test_compact_returns_correct_mapping(store):
+    v = np.ones(DIM, dtype=np.float32)
+    off0 = store.append(v)
+    off1 = store.append(v)
+    off2 = store.append(v)
+
+    mapping = store.compact([off0, off2])
+    assert mapping == {off0: 0, off2: BYTES_PER_VEC}
+
+def test_compact_updates_count(store):
+    v = np.ones(DIM, dtype=np.float32)
+    store.append(v)
+    store.append(v)
+    store.append(v)
+    assert store.count() == 3
+
+    store.compact([0, BYTES_PER_VEC * 2])
+    assert store.count() == 2
+
+def test_compact_updates_size(store):
+    v = np.ones(DIM, dtype=np.float32)
+    store.append(v)
+    store.append(v)
+    store.append(v)
+
+    store.compact([0])
+    assert store.size() == BYTES_PER_VEC
+
+def test_compact_empty_live_offsets(store):
+    v = np.ones(DIM, dtype=np.float32)
+    store.append(v)
+
+    mapping = store.compact([])
+    assert mapping == {}
+    assert store.count() == 0
+    assert store.size() == 0

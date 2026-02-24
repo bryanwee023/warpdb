@@ -115,23 +115,23 @@ def test_reinsert_after_delete_succeeds(store):
 def test_iter_offsets_empty(store):
     assert list(store.iter_offsets()) == []
 
-def test_iter_offsets_returns_id_and_file_offset(store):
+def test_iter_offsets_returns_file_offsets(store):
     store.insert(1, 100, "a")
     store.insert(2, 200, "b")
-    assert list(store.iter_offsets()) == [(1, 100), (2, 200)]
+    assert list(store.iter_offsets()) == [100, 200]
 
-def test_iter_offsets_ordered_by_id(store):
+def test_iter_offsets_ordered_by_offset(store):
     store.insert(10, 300, "c")
     store.insert(3, 100, "a")
     store.insert(7, 200, "b")
-    assert list(store.iter_offsets()) == [(3, 100), (7, 200), (10, 300)]
+    assert list(store.iter_offsets()) == [100, 200, 300]
 
 def test_iter_offsets_excludes_deleted(store):
     store.insert(1, 100, "a")
     store.insert(2, 200, "b")
     store.insert(3, 300, "c")
     store.delete("b")
-    assert list(store.iter_offsets()) == [(1, 100), (3, 300)]
+    assert list(store.iter_offsets()) == [100, 300]
 
 
 # ---------------------------------------------------------------------------
@@ -157,3 +157,28 @@ def test_get_max_id_returns_zero_after_all_deleted(store):
     store.insert(1, 100, "a")
     store.delete("a")
     assert store.get_max_id() == 0
+
+
+# ---------------------------------------------------------------------------
+# update_offsets
+# ---------------------------------------------------------------------------
+
+def test_update_offsets_changes_offsets(store):
+    store.insert(0, 100, "a")
+    store.insert(1, 200, "b")
+    store.update_offsets({100: 0, 200: 16})
+    assert store.get(0)["file_offset"] == 0
+    assert store.get(1)["file_offset"] == 16
+
+def test_update_offsets_preserves_other_fields(store):
+    store.insert(0, 100, "a", metadata={"x": 1})
+    store.update_offsets({100: 0})
+    row = store.get(0)
+    assert row["name"] == "a"
+    assert row["metadata"] == {"x": 1}
+
+def test_update_offsets_reflected_in_iter_offsets(store):
+    store.insert(0, 100, "a")
+    store.insert(1, 200, "b")
+    store.update_offsets({100: 0, 200: 16})
+    assert list(store.iter_offsets()) == [0, 16]

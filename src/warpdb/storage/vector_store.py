@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import Dict, Iterator, List, Optional
 
 import numpy as np
 
@@ -68,4 +68,26 @@ class VectorStore:
             raise IndexError("Offset out of range.")
 
         return self._get_mmap()[index]
+
+    def compact(self, live_offsets: Iterator[int]) -> Dict[int, int]:
+        """Rewrite file with only the vectors at the given offsets.
+
+        Returns mapping of old_offset -> new_offset.
+        """
+        tmp_path = self._path.replace(".f32", ".compact.f32")
+        bytes_per_vec = self._dim * 4
+        mapping: Dict[int, int] = {}
+
+        count = 0
+        with open(tmp_path, "wb") as f:
+            for i, live_offset in enumerate(live_offsets):
+                vec = self.get(live_offset)
+                vec.tofile(f)
+                mapping[live_offset] = i * bytes_per_vec
+                count += 1
+
+        os.replace(tmp_path, self._path)
+        self._count = count
+        self._mmap = None
+        return mapping
 

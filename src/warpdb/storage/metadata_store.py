@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 import sqlite3
 
 class MetadataStore:
@@ -62,6 +62,12 @@ class MetadataStore:
             "metadata": metadata,
         }
 
+    def get_id(self, name: str) -> Optional[int]:
+        cursor = self._conn.cursor()
+        cursor.execute("SELECT id FROM metadata WHERE name = ?", (name,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+
     def delete(self, name: str) -> None:
         self._conn.execute(
             "DELETE FROM metadata WHERE name = ?",
@@ -69,12 +75,28 @@ class MetadataStore:
         )
         self._conn.commit()
 
-    def iter_offsets(self) -> Iterator[Tuple[int, int]]:
+    def iter_offsets(self) -> Iterator[int]:
+        """Yield file_offset values ordered by file_offset."""
+        cursor = self._conn.cursor()
+        cursor.execute("SELECT file_offset FROM metadata ORDER BY file_offset")
+        for row in cursor:
+            yield row[0]
+
+    def iter_ids_with_offsets(self) -> Iterator[Tuple[int, int]]:
         """Yield (id, file_offset) pairs ordered by id."""
         cursor = self._conn.cursor()
         cursor.execute("SELECT id, file_offset FROM metadata ORDER BY id")
         for row in cursor:
             yield row[0], row[1]
+
+    def update_offsets(self, updates: Dict[int, int]) -> None:
+        """Batch update file_offset for records. updates: {old_offset: new_offset}"""
+        # TODO: Check if problematic
+        self._conn.executemany(
+            "UPDATE metadata SET file_offset = ? WHERE file_offset = ?",
+            [(new_offset, old_offset) for old_offset, new_offset in updates.items()],
+        )
+        self._conn.commit()
 
     def count(self) -> int:
         cursor = self._conn.cursor()

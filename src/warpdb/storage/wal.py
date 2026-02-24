@@ -2,7 +2,7 @@ import json
 import os
 import struct
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -18,10 +18,12 @@ _HEADER_SIZE = 10
 _TYPE_UPSERT = 0x01
 _TYPE_DELETE = 0x02
 _TYPE_COMMIT = 0x03
+_TYPE_COMPACT = 0x04
 
-# UPSERT layout: magic(4) type(1) lsn(4) id(4) file_offset(4) vector(dim*4) name_len(4) name(N) meta_len(4) meta(M)
-# DELETE layout: magic(4) type(1) lsn(4) id_len(4) id(N)
-# COMMIT layout: magic(4) type(1) lsn(4)
+# UPSERT layout:  magic(4) type(1) lsn(4) id(4) file_offset(4) vector(dim*4) name_len(4) name(N) meta_len(4) meta(M)
+# DELETE layout:  magic(4) type(1) lsn(4) id_len(4) id(N)
+# COMMIT layout:  magic(4) type(1) lsn(4)
+# COMPACT layout: magic(4) type(1) lsn(4)
 
 
 @dataclass
@@ -38,6 +40,11 @@ class UpsertRecord:
 class DeleteRecord:
     lsn: int
     id: str
+
+
+@dataclass
+class CompactRecord:
+    lsn: int
 
 
 class WAL:
@@ -99,6 +106,20 @@ class WAL:
             f.flush()
             os.fsync(f.fileno())
 
+    def log_compact(self) -> int:
+        """Write a COMPACT record and fsync. Returns the LSN."""
+        lsn = self._lsn
+        self._lsn += 1
+
+        record = _MAGIC + struct.pack("<BI", _TYPE_COMPACT, lsn)
+
+        with open(self._path, "ab") as f:
+            f.write(record)
+            f.flush()
+            os.fsync(f.fileno())
+
+        return lsn
+
     def log_delete(self, id: str) -> int:
         """Write a DELETE record and fsync. Returns the LSN."""
         lsn = self._lsn
@@ -115,13 +136,13 @@ class WAL:
 
         return lsn
 
-    def get_pending(self) -> List[UpsertRecord | DeleteRecord]:
+    def get_pending(self) -> List[UpsertRecord | DeleteRecord | CompactRecord]:
         """Return the trailing record which has no matching COMMIT (at most one).
 
         Because upsert() holds a lock, only one operation is in flight at a time,
         so a pending entry is always at the tail of the WAL.
         """
-        last_record : Optional[UpsertRecord | DeleteRecord] = None
+        last_record : Optional[UpsertRecord | DeleteRecord | CompactRecord] = None
 
         for rec_type, _, payload in self._iter_records():
             if rec_type == _TYPE_COMMIT:
@@ -211,6 +232,9 @@ class WAL:
                     if record is None:
                         break  # truncated mid-record
                     yield _TYPE_DELETE, lsn, record
+
+                elif rec_type == _TYPE_COMPACT:
+                    yield _TYPE_COMPACT, lsn, CompactRecord(lsn=lsn)
 
                 else:
                     break  # unknown type — stop

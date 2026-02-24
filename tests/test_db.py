@@ -166,3 +166,127 @@ def test_search_nearest_neighbor_clearly_separated(db):
 
     results = db.search(query, k=1)
     assert results[0][1] == "z"
+
+
+# ---------------------------------------------------------------------------
+# compact
+# ---------------------------------------------------------------------------
+
+def test_compact_reduces_vector_count(db):
+    random.seed(0)
+    for i in range(5):
+        db.upsert(str(i), [float(i), 0, 0, 0])
+    # Delete 1 of 5 (20% dead — below 25% threshold, no auto-compact)
+    db.delete("0")
+    assert db._vector_store.count() == 5
+    db.compact()
+    assert db._vector_store.count() == 4
+
+def test_search_works_after_compact(db):
+    random.seed(0)
+    db.upsert("a", [1, 0, 0, 0])
+    db.upsert("b", [0, 1, 0, 0])
+    db.upsert("c", [0, 0, 1, 0])
+    db.delete("b")
+    db.compact()
+
+    results = db.search([1, 0, 0, 0], k=1)
+    assert results[0][1] == "a"
+
+def test_compact_is_idempotent(db):
+    random.seed(0)
+    db.upsert("a", [1, 0, 0, 0])
+    db.compact()
+    db.compact()  # should not raise
+    assert db.count() == 1
+
+def test_auto_compact_triggers_above_threshold(tmp_path):
+    """Insert 4 vectors, delete 2 (50% dead > 25% threshold) — auto-compacts."""
+    random.seed(0)
+    db = WarpDB(dim=DIM, data_dir=str(tmp_path))
+    for i in range(4):
+        db.upsert(str(i), [float(i), 0, 0, 0])
+    assert db._vector_store.count() == 4
+
+    db.delete("0")  # 25% dead — at threshold, not above
+    assert db._vector_store.count() == 4
+
+    db.delete("1")  # 50% dead — triggers compaction
+    assert db._vector_store.count() == 2
+
+def test_upsert_after_compact_works(db):
+    random.seed(0)
+    db.upsert("a", [1, 0, 0, 0])
+    db.upsert("b", [0, 1, 0, 0])
+    db.delete("a")
+    db.compact()
+
+    db.upsert("c", [0, 0, 1, 0])
+    assert db.count() == 2
+    results = db.search([0, 0, 1, 0], k=1)
+    assert results[0][1] == "c"
+
+
+# ---------------------------------------------------------------------------
+# compact — crash recovery
+# ---------------------------------------------------------------------------
+
+def test_recovery_crash_before_file_swap(tmp_path):
+    """COMPACT WAL record written, temp file exists, but os.replace never happened.
+    Recovery should discard temp file; data stays at pre-compaction state."""
+    import os, shutil
+
+    random.seed(0)
+    db1 = WarpDB(dim=DIM, data_dir=str(tmp_path))
+    db1.upsert("a", [1, 0, 0, 0])
+    db1.upsert("b", [0, 1, 0, 0])
+    db1.delete("a")
+
+    # Simulate: COMPACT WAL record (no commit) + temp file exists
+    from warpdb.storage.wal import WAL
+    wal = WAL(str(tmp_path / "wal.bin"), DIM)
+    wal.log_compact()
+
+    tmp_vec_path = str(tmp_path / "vectors.compact.f32")
+    shutil.copy(str(tmp_path / "vectors.f32"), tmp_vec_path)
+
+    # Restart — should discard temp file, keep original vector file
+    random.seed(0)
+    db2 = WarpDB(dim=DIM, data_dir=str(tmp_path))
+    assert not os.path.exists(tmp_vec_path)
+    assert db2.count() == 1
+    results = db2.search([0, 1, 0, 0], k=1)
+    assert results[0][1] == "b"
+
+
+def test_recovery_crash_after_file_swap(tmp_path):
+    """os.replace succeeded but metadata not yet updated.
+    Recovery should recompute offsets from MetadataStore."""
+    random.seed(0)
+    db1 = WarpDB(dim=DIM, data_dir=str(tmp_path))
+    db1.upsert("a", [1, 0, 0, 0])
+    db1.upsert("b", [0, 1, 0, 0])
+    db1.upsert("c", [0, 0, 1, 0])
+    db1.delete("a")
+
+    # Manually perform compaction steps up to the crash point:
+    live_offsets = db1._metadata_store.iter_offsets()
+
+    # Write COMPACT WAL record (no commit)
+    from warpdb.storage.wal import WAL
+    wal = WAL(str(tmp_path / "wal.bin"), DIM)
+    wal.log_compact()
+
+    # Rewrite vector file (os.replace happens inside)
+    db1._vector_store.compact(live_offsets)
+
+    # "Crash" here — metadata still has OLD offsets, no COMMIT in WAL
+
+    # Restart — recovery should recompute offsets, fix metadata
+    random.seed(0)
+    db2 = WarpDB(dim=DIM, data_dir=str(tmp_path))
+    assert db2.count() == 2
+    results = db2.search([0, 1, 0, 0], k=1)
+    assert results[0][1] == "b"
+    results = db2.search([0, 0, 1, 0], k=1)
+    assert results[0][1] == "c"

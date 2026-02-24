@@ -67,7 +67,10 @@ class HNSW:
             if dist_c > dist_f:
                 break # all remaining candidates are farther than worst in found
 
-            for nid in self._graph.get(layer, {}).get(c, set()):
+            neighbors = self._graph.get(layer, {}).get(c, set())
+            for nid in list(neighbors):
+                if nid not in self._offsets:
+                    continue # node was lazily deleted, so skip
                 if nid in visited:
                     continue
 
@@ -159,3 +162,33 @@ class HNSW:
         # Beam search at layer 0
         results = self._search_layer(query, eid, max(self._ef_search, k), layer=0)
         return results[:k]
+
+    def delete(self, node_id: int) -> None:
+        """Mark a node as deleted."""
+        self._offsets.pop(node_id, None)
+
+        if self._entry_point == node_id:
+            if self._offsets:
+                self._entry_point = next(iter(self._offsets))
+            else:
+                self._entry_point = None
+                self._max_layer = -1
+
+    def compact(self, updates: Dict[int, int]) -> None:
+        """
+        Apply offset updates and rebuild the graph from live nodes.
+        updates: {old_offset: new_offset}
+        """
+        new_offsets = {}
+        for node_id, old_offset in self._offsets.items():
+            if old_offset in updates:
+                new_offsets[node_id] = updates[old_offset]
+
+        self._offsets.clear()
+        self._graph.clear()
+        self._entry_point = None
+        self._max_layer = -1
+
+        for node_id, file_offset in new_offsets.items():
+            vec = self._vector_store.get(file_offset)
+            self.insert(node_id, file_offset, vec)
