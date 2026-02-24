@@ -1,0 +1,43 @@
+from typing import Any, Dict, List, Optional
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+from warpdb.api.models import UpsertRequest
+from warpdb.db import WarpDB
+
+# ---------- App + DB lifecycle ----------
+
+app = FastAPI(title="warpdb", version="0.1.0")
+
+_db: Optional[WarpDB] = None
+
+def get_db() -> WarpDB:
+    global _db
+    dim = 128 # TODO: Configurable dimension
+    if _db is None:
+        _db = WarpDB(dim)
+    return _db
+
+# ---------- Routes ----------
+
+@app.get("/health")
+def health() -> Dict[str, Any]:
+    db = get_db()
+    return {
+        "ok": True,
+        "count": db.count(),
+    }
+
+@app.post("/upsert")
+def upsert(req: UpsertRequest) -> Dict[str, Any]:
+    db = get_db()
+    try:
+        db.upsert(req.id, req.vector, req.metadata)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {
+        "ok": True,
+        "count": db.count(),
+    }
