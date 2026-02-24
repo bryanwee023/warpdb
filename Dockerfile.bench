@@ -1,0 +1,30 @@
+# Benchmark runner image for WarpDB.
+#
+# Installs production deps (for numpy) plus httpx (used by bench.py),
+# then runs the benchmark suite against a remote WarpDB server.
+#
+# Usage (standalone):
+#   docker build -f Dockerfile.bench -t warpdb-bench .
+#   docker run --network host warpdb-bench --url http://localhost:8000
+#
+# Usage (with docker compose):
+#   docker compose up --build
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir poetry
+
+COPY pyproject.toml poetry.lock ./
+
+# Install main deps (numpy) + dev group (httpx) — no virtualenv in container
+RUN poetry config virtualenvs.create false \
+    && poetry install --no-interaction --no-root
+
+COPY src/ src/
+COPY benchmarks/ benchmarks/
+
+RUN poetry install --no-interaction
+
+ENTRYPOINT ["python", "benchmarks/bench.py"]
