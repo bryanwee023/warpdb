@@ -53,3 +53,15 @@ class MetadataStore:
             "vec_id": vec_id,
             "metadata": metadata,
         }
+
+    def delete(self, id: str) -> None:
+        self._conn.execute(
+            "DELETE FROM metadata WHERE id = ?",
+            (id,),
+        )
+        self._conn.commit()
+
+    def count_active(self) -> int:
+        cursor = self._conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM metadata")
+        return cursor.fetchone()[0]

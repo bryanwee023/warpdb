@@ -29,11 +29,23 @@ def health() -> Dict[str, Any]:
         "count": db.count(),
     }
 
-@app.post("/upsert")
-def upsert(req: UpsertRequest) -> Dict[str, Any]:
+@app.delete("/vectors/{id}")
+def delete_vector(id: str) -> Dict[str, Any]:
     db = get_db()
     try:
-        db.upsert(req.id, req.vector, req.metadata)
+        db.delete(id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {
+        "ok": True,
+        "count": db.count(),
+    }
+
+@app.put("/vectors/{id}")
+def upsert(id: str, req: UpsertRequest) -> Dict[str, Any]:
+    db = get_db()
+    try:
+        db.upsert(id, req.vector, req.metadata)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

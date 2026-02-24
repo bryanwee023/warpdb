@@ -16,9 +16,11 @@ _HEADER_SIZE = 10
 
 # Record type bytes
 _TYPE_UPSERT = 0x01
-_TYPE_COMMIT = 0x02
+_TYPE_DELETE = 0x02
+_TYPE_COMMIT = 0x03
 
 # UPSERT layout: magic(4) type(1) lsn(4) id_len(4) id(N) vec_id(4) vector(dim*4) meta_len(4) meta(M)
+# DELETE layout: magic(4) type(1) lsn(4) id_len(4) id(N)
 # COMMIT layout: magic(4) type(1) lsn(4)
 
 
@@ -29,6 +31,12 @@ class UpsertRecord:
     vec_id: int
     vector: np.ndarray
     metadata: Optional[Dict[str, Any]]
+
+
+@dataclass
+class DeleteRecord:
+    lsn: int
+    id: str
 
 
 class WAL:
@@ -88,22 +96,38 @@ class WAL:
             f.flush()
             os.fsync(f.fileno())
 
-    def get_pending(self) -> List[UpsertRecord]:
-        """Return the trailing UPSERT record if it has no matching COMMIT (at most one).
+    def log_delete(self, id: str) -> int:
+        """Write a DELETE record and fsync. Returns the LSN."""
+        lsn = self._lsn
+        self._lsn += 1
+
+        id_bytes = id.encode("utf-8")
+        header = _MAGIC + struct.pack("<BI", _TYPE_DELETE, lsn)
+        body = struct.pack("<I", len(id_bytes)) + id_bytes
+
+        with open(self._path, "ab") as f:
+            f.write(header + body)
+            f.flush()
+            os.fsync(f.fileno())
+
+        return lsn
+
+    def get_pending(self) -> List[UpsertRecord | DeleteRecord]:
+        """Return the trailing record which has no matching COMMIT (at most one).
 
         Because upsert() holds a lock, only one operation is in flight at a time,
         so a pending entry is always at the tail of the WAL.
         """
-        last_upsert: Optional[UpsertRecord] = None
+        last_record : Optional[UpsertRecord | DeleteRecord] = None
 
         for rec_type, _, payload in self._iter_records():
-            if rec_type == _TYPE_UPSERT:
+            if rec_type == _TYPE_COMMIT:
+                last_record = None
+            else:
                 assert payload is not None
-                last_upsert = payload
-            elif rec_type == _TYPE_COMMIT:
-                last_upsert = None
+                last_record = payload
 
-        return [last_upsert] if last_upsert is not None else []
+        return [last_record] if last_record is not None else []
 
     def checkpoint(self) -> None:
         """Rewrite the file to header-only (call only when all entries are committed)."""
@@ -149,7 +173,7 @@ class WAL:
         """
         Yield (type, lsn, payload) for each valid record after the header.
         Stops silently on truncated/corrupt data (treat as end-of-file).
-        payload is an UpsertRecord for UPSERT records, None for COMMIT records.
+        payload is UpsertRecord/DeleteRecord for data records, None for COMMIT.
         """
         if not os.path.exists(self._path):
             return
@@ -178,6 +202,12 @@ class WAL:
                     if record is None:
                         break  # truncated mid-record
                     yield _TYPE_UPSERT, lsn, record
+
+                elif rec_type == _TYPE_DELETE:
+                    record = self._read_delete_payload(f, lsn)
+                    if record is None:
+                        break  # truncated mid-record
+                    yield _TYPE_DELETE, lsn, record
 
                 else:
                     break  # unknown type — stop
@@ -222,3 +252,17 @@ class WAL:
         metadata = json.loads(meta_bytes.decode("utf-8")) if meta_len > 0 else None
 
         return UpsertRecord(lsn=lsn, id=id_, vec_id=vec_id, vector=vector, metadata=metadata)
+
+    @staticmethod
+    def _read_delete_payload(f, lsn: int) -> Optional[DeleteRecord]:
+        """Read the variable-length body of a DELETE record from file f."""
+        raw = f.read(4)
+        if len(raw) < 4:
+            return None
+        (id_len,) = struct.unpack("<I", raw)
+
+        id_bytes = f.read(id_len)
+        if len(id_bytes) < id_len:
+            return None
+
+        return DeleteRecord(lsn=lsn, id=id_bytes.decode("utf-8"))

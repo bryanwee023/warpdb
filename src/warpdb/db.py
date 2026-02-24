@@ -5,7 +5,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 from warpdb.storage import MetadataStore, VectorStore
-from warpdb.storage.wal import WAL
+from warpdb.storage.wal import WAL, DeleteRecord, UpsertRecord
 from warpdb.index import HNSW
 
 class WarpDB:
@@ -20,16 +20,18 @@ class WarpDB:
         # Replay any writes that didn't complete before the last crash
         self._recover()
 
-        # Rebuild the in-memory HNSW graph from the (now-consistent) vector store
+        # Rebuild the in-memory HNSW graph from the (now-consistent) vector store,
+        # skipping soft-deleted entries. TODO: revisit after compaction is implemented.
         for vec_id in range(self._vector_store.count()):
-            vec = self._vector_store.get(vec_id)
-            self._index._insert(vec_id, vec)
+            if self._metadata_store.get(vec_id) is not None:
+                vec = self._vector_store.get(vec_id)
+                self._index._insert(vec_id, vec)
 
         # All pending WAL entries are resolved; compact the log
         self._wal.checkpoint()
 
     def count(self) -> int:
-        return self._vector_store.count()
+        return self._metadata_store.count_active()
 
     def upsert(
         self,
@@ -69,6 +71,15 @@ class WarpDB:
                     results.append((dist, metadata["id"]))
             return results
 
+    def delete(self, id: str) -> None:
+        with self._lock:
+            if not self._metadata_store.exists(id):
+                raise ValueError(f"ID '{id}' not found")
+
+            lsn = self._wal.log_delete(id)
+            self._metadata_store.delete(id)
+            self._wal.log_commit(lsn)
+
     # ------------------------------------------------------------------
     # Private
     # ------------------------------------------------------------------
@@ -76,11 +87,16 @@ class WarpDB:
     def _recover(self) -> None:
         """Replay any WAL entries that did not reach COMMIT before a crash."""
         for record in self._wal.get_pending():
-            if record.vec_id >= self._vector_store.count():
-                # Vector was never written — append it now
-                self._vector_store.append(record.vector)
+            if isinstance(record, UpsertRecord):
+                if record.vec_id >= self._vector_store.count():
+                    # Vector was never written — append it now
+                    self._vector_store.append(record.vector)
 
-            if self._metadata_store.get(record.vec_id) is None:
-                self._metadata_store.insert(record.id, record.vec_id, record.metadata)
+                if self._metadata_store.get(record.vec_id) is None:
+                    self._metadata_store.insert(record.id, record.vec_id, record.metadata)
 
-            self._wal.log_commit(record.lsn)
+                self._wal.log_commit(record.lsn)
+            elif isinstance(record, DeleteRecord):
+                self._metadata_store.delete(record.id)  # idempotent
+                self._wal.log_commit(record.lsn)
+

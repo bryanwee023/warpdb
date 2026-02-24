@@ -57,3 +57,48 @@ def test_exists_does_not_cross_contaminate(store):
     store.insert("a", vec_id=0)
     assert store.exists("a") is True
     assert store.exists("b") is False
+
+
+# ---------------------------------------------------------------------------
+# delete / count_active
+# ---------------------------------------------------------------------------
+
+def test_delete_makes_exists_return_false(store):
+    store.insert("a", vec_id=0)
+    store.delete("a")
+    assert store.exists("a") is False
+
+def test_delete_makes_get_return_none(store):
+    store.insert("a", vec_id=0)
+    store.delete("a")
+    assert store.get(0) is None
+
+def test_delete_is_idempotent(store):
+    store.insert("a", vec_id=0)
+    store.delete("a")
+    store.delete("a")  # should not raise
+    assert store.exists("a") is False
+
+def test_delete_nonexistent_is_noop(store):
+    store.delete("ghost")  # should not raise
+
+def test_count_active_starts_at_zero(store):
+    assert store.count_active() == 0
+
+def test_count_active_increments_on_insert(store):
+    store.insert("a", vec_id=0)
+    store.insert("b", vec_id=1)
+    assert store.count_active() == 2
+
+def test_count_active_decrements_on_delete(store):
+    store.insert("a", vec_id=0)
+    store.insert("b", vec_id=1)
+    store.delete("a")
+    assert store.count_active() == 1
+
+def test_reinsert_after_delete_succeeds(store):
+    store.insert("a", vec_id=0)
+    store.delete("a")
+    store.insert("a", vec_id=1)  # same string id, new vec_id
+    assert store.exists("a") is True
+    assert store.get(1)["id"] == "a"

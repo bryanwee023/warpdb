@@ -94,6 +94,64 @@ def test_search_results_sorted_ascending_by_distance(db):
     dists = [d for d, _ in results]
     assert dists == sorted(dists)
 
+# ---------------------------------------------------------------------------
+# delete
+# ---------------------------------------------------------------------------
+
+def test_delete_decrements_count(db):
+    random.seed(0)
+    db.upsert("a", [1, 0, 0, 0])
+    assert db.count() == 1
+    db.delete("a")
+    assert db.count() == 0
+
+def test_delete_removes_from_search(db):
+    random.seed(0)
+    db.upsert("a", [1, 0, 0, 0])
+    db.delete("a")
+    results = db.search([1, 0, 0, 0], k=5)
+    ids = [id for _, id in results]
+    assert "a" not in ids
+
+def test_delete_nonexistent_raises(db):
+    with pytest.raises(ValueError, match="not found"):
+        db.delete("ghost")
+
+def test_delete_already_deleted_raises(db):
+    random.seed(0)
+    db.upsert("a", [1, 0, 0, 0])
+    db.delete("a")
+    with pytest.raises(ValueError, match="not found"):
+        db.delete("a")
+
+def test_upsert_same_id_after_delete_succeeds(db):
+    random.seed(0)
+    db.upsert("a", [1, 0, 0, 0])
+    db.delete("a")
+    db.upsert("a", [0, 1, 0, 0])  # should not raise
+    assert db.count() == 1
+
+def test_recovery_crash_after_delete_intent(tmp_path):
+    """Simulate: DELETE WAL record written, metadata not yet updated. Recovery should delete."""
+    import random as _random
+    _random.seed(0)
+
+    db1 = WarpDB(dim=DIM, data_dir=str(tmp_path))
+    db1.upsert("a", [1, 0, 0, 0])
+    # Simulate crash after log_delete but before metadata.delete by manipulating WAL directly
+    from warpdb.storage.wal import WAL
+    wal = WAL(str(tmp_path / "wal.bin"), DIM)
+    wal.log_delete("a")
+    # Do NOT commit or update metadata — simulates crash mid-delete
+
+    # Restart
+    _random.seed(0)
+    db2 = WarpDB(dim=DIM, data_dir=str(tmp_path))
+    assert db2.count() == 0
+    results = db2.search([1, 0, 0, 0], k=5)
+    assert all(id != "a" for _, id in results)
+
+
 def test_search_nearest_neighbor_clearly_separated(db):
     """Vectors on scaled basis axes are trivially separable."""
     random.seed(42)

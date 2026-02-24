@@ -33,36 +33,35 @@ def test_health_body(client):
 
 def test_health_count_reflects_upserts(client):
     random.seed(0)
-    client.post("/upsert", json={"id": "a", "vector": vec([1, 0, 0, 0])})
-    client.post("/upsert", json={"id": "b", "vector": vec([0, 1, 0, 0])})
+    client.put("/vectors/a", json={"vector": vec([1, 0, 0, 0])})
+    client.put("/vectors/b", json={"vector": vec([0, 1, 0, 0])})
     res = client.get("/health")
     assert res.json()["count"] == 2
 
 # ---------------------------------------------------------------------------
-# POST /upsert
+# PUT /vectors/{id}
 # ---------------------------------------------------------------------------
 
 def test_upsert_returns_200(client):
     random.seed(0)
-    res = client.post("/upsert", json={"id": "a", "vector": vec([1, 0, 0, 0])})
+    res = client.put("/vectors/a", json={"vector": vec([1, 0, 0, 0])})
     assert res.status_code == 200
 
 def test_upsert_response_body(client):
     random.seed(0)
-    res = client.post("/upsert", json={"id": "a", "vector": vec([1, 0, 0, 0])})
+    res = client.put("/vectors/a", json={"vector": vec([1, 0, 0, 0])})
     assert res.json() == {"ok": True, "count": 1}
 
 def test_upsert_count_increments_in_response(client):
     random.seed(0)
-    res1 = client.post("/upsert", json={"id": "a", "vector": vec([1, 0, 0, 0])})
-    res2 = client.post("/upsert", json={"id": "b", "vector": vec([0, 1, 0, 0])})
+    res1 = client.put("/vectors/a", json={"vector": vec([1, 0, 0, 0])})
+    res2 = client.put("/vectors/b", json={"vector": vec([0, 1, 0, 0])})
     assert res1.json()["count"] == 1
     assert res2.json()["count"] == 2
 
 def test_upsert_with_metadata(client):
     random.seed(0)
-    res = client.post("/upsert", json={
-        "id": "a",
+    res = client.put("/vectors/a", json={
         "vector": vec([1, 0, 0, 0]),
         "metadata": {"color": "red"},
     })
@@ -70,20 +69,45 @@ def test_upsert_with_metadata(client):
 
 def test_upsert_without_metadata(client):
     random.seed(0)
-    res = client.post("/upsert", json={"id": "a", "vector": vec([1, 0, 0, 0])})
+    res = client.put("/vectors/a", json={"vector": vec([1, 0, 0, 0])})
     assert res.status_code == 200
 
 def test_upsert_duplicate_id_returns_400(client):
     random.seed(0)
-    client.post("/upsert", json={"id": "a", "vector": vec([1, 0, 0, 0])})
-    res = client.post("/upsert", json={"id": "a", "vector": vec([0, 1, 0, 0])})
+    client.put("/vectors/a", json={"vector": vec([1, 0, 0, 0])})
+    res = client.put("/vectors/a", json={"vector": vec([0, 1, 0, 0])})
     assert res.status_code == 400
     assert "'a' already exists" in res.json()["detail"]
 
-def test_upsert_missing_id_returns_422(client):
-    res = client.post("/upsert", json={"vector": vec([1, 0, 0, 0])})
+def test_upsert_missing_vector_returns_422(client):
+    res = client.put("/vectors/a", json={})
     assert res.status_code == 422
 
-def test_upsert_missing_vector_returns_422(client):
-    res = client.post("/upsert", json={"id": "a"})
-    assert res.status_code == 422
+
+# ---------------------------------------------------------------------------
+# DELETE /vectors/{id}
+# ---------------------------------------------------------------------------
+
+def test_delete_returns_200(client):
+    random.seed(0)
+    client.put("/vectors/a", json={"vector": vec([1, 0, 0, 0])})
+    res = client.delete("/vectors/a")
+    assert res.status_code == 200
+
+def test_delete_response_body(client):
+    random.seed(0)
+    client.put("/vectors/a", json={"vector": vec([1, 0, 0, 0])})
+    res = client.delete("/vectors/a")
+    assert res.json() == {"ok": True, "count": 0}
+
+def test_delete_decrements_health_count(client):
+    random.seed(0)
+    client.put("/vectors/a", json={"vector": vec([1, 0, 0, 0])})
+    client.put("/vectors/b", json={"vector": vec([0, 1, 0, 0])})
+    client.delete("/vectors/a")
+    res = client.get("/health")
+    assert res.json()["count"] == 1
+
+def test_delete_nonexistent_returns_404(client):
+    res = client.delete("/vectors/ghost")
+    assert res.status_code == 404

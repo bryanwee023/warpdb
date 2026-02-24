@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from warpdb.storage.wal import WAL
+from warpdb.storage.wal import WAL, DeleteRecord, UpsertRecord
 
 DIM = 4
 
@@ -216,3 +216,59 @@ def test_recovery_crash_before_vector_write(tmp_path):
     row = ms2.get(0)
     assert row is not None
     assert row["id"] == "no-vector"
+
+
+# ---------------------------------------------------------------------------
+# log_delete
+# ---------------------------------------------------------------------------
+
+def test_log_delete_creates_pending_record(wal):
+    lsn = wal.log_delete("a")
+    pending = wal.get_pending()
+    assert len(pending) == 1
+    assert isinstance(pending[0], DeleteRecord)
+    assert pending[0].lsn == lsn
+    assert pending[0].id == "a"
+
+
+def test_log_commit_clears_pending_delete(wal):
+    lsn = wal.log_delete("a")
+    assert len(wal.get_pending()) == 1
+    wal.log_commit(lsn)
+    assert wal.get_pending() == []
+
+
+def test_no_pending_on_empty_wal_after_delete_section(wal):
+    assert wal.get_pending() == []
+
+
+def test_pending_delete_survives_wal_restart(tmp_path):
+    path = str(tmp_path / "wal.bin")
+
+    w1 = WAL(path, DIM)
+    w1.log_delete("to-delete")
+    # no commit — simulates crash
+
+    w2 = WAL(path, DIM)
+    pending = w2.get_pending()
+    assert len(pending) == 1
+    assert isinstance(pending[0], DeleteRecord)
+    assert pending[0].id == "to-delete"
+
+
+def test_committed_delete_absent_after_restart(tmp_path):
+    path = str(tmp_path / "wal.bin")
+
+    w1 = WAL(path, DIM)
+    lsn = w1.log_delete("a")
+    w1.log_commit(lsn)
+
+    w2 = WAL(path, DIM)
+    assert w2.get_pending() == []
+
+
+def test_pending_upsert_is_upsert_record_not_delete_record(wal):
+    wal.log_upsert("a", 0, _vec(1.0), None)
+    pending = wal.get_pending()
+    assert len(pending) == 1
+    assert isinstance(pending[0], UpsertRecord)
