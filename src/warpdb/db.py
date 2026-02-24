@@ -11,7 +11,9 @@ from warpdb.index import HNSW
 
 class WarpDB:
     def __init__(self, dim: int, data_dir: str = "."):
-        dir_path = Path(data_dir)
+        dir_path = Path(data_dir) / "data"
+        dir_path.mkdir(parents=True, exist_ok=True)
+
         self._dim = dim
         self._vector_store = VectorStore(str(dir_path / "vectors.f32"), dim)
         self._metadata_store = MetadataStore(str(dir_path / "metadata.db"))

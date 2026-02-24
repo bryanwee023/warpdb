@@ -140,7 +140,7 @@ def test_recovery_crash_after_delete_intent(tmp_path):
     db1.upsert("a", [1, 0, 0, 0])
     # Simulate crash after log_delete but before metadata.delete by manipulating WAL directly
     from warpdb.storage.wal import WAL
-    wal = WAL(str(tmp_path / "wal.bin"), DIM)
+    wal = WAL(str(tmp_path / "data" / "wal.bin"), DIM)
     wal.log_delete("a")
     # Do NOT commit or update metadata — simulates crash mid-delete
 
