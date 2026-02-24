@@ -10,7 +10,7 @@ class MetadataStore:
             """
             CREATE TABLE IF NOT EXISTS metadata (
                 id             INTEGER PRIMARY KEY,
-                file_offset    INTEGER NOT NULL,
+                file_offset    INTEGER NOT NULL UNIQUE,
                 name           TEXT NOT NULL UNIQUE,
                 metadata       TEXT
             )
@@ -91,10 +91,17 @@ class MetadataStore:
 
     def update_offsets(self, updates: Dict[int, int]) -> None:
         """Batch update file_offset for records. updates: {old_offset: new_offset}"""
-        # TODO: Check if problematic
+        cursor = self._conn.cursor()
+        cursor.execute("SELECT id, file_offset FROM metadata")
+        offset_to_id = {file_offset: row_id for row_id, file_offset in cursor}
+
         self._conn.executemany(
-            "UPDATE metadata SET file_offset = ? WHERE file_offset = ?",
-            [(new_offset, old_offset) for old_offset, new_offset in updates.items()],
+            "UPDATE metadata SET file_offset = ? WHERE id = ?",
+            [
+                (new_offset, offset_to_id[old_offset])
+                for old_offset, new_offset in updates.items()
+                if old_offset in offset_to_id
+            ],
         )
         self._conn.commit()
 
