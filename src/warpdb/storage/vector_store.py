@@ -52,6 +52,8 @@ class VectorStore:
 
         with open(self._path, "ab") as f:
             vector.tofile(f)
+            f.flush()
+            os.fsync(f.fileno())
 
         self._count += 1
         self._mmap = None  # invalidate cached mmap
@@ -85,6 +87,8 @@ class VectorStore:
                 vec.tofile(f)
                 mapping[live_offset] = i * bytes_per_vec
                 count += 1
+            f.flush()
+            os.fsync(f.fileno())
 
         os.replace(tmp_path, self._path)
         self._count = count
